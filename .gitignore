@@ -1,0 +1,6 @@
+# .NET / Visual Studio 빌드 산출물
+bin/
+obj/
+.vs/
+*.user
+*.suo
