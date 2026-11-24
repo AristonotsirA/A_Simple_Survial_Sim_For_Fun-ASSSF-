@@ -1,7 +1,6 @@
 namespace ZombieOutbreak.Core;
 
-public sealed record NewsItem(int Week, string Text, ConsoleColor Color);
-public sealed record WeekSnapshot(int Week, double Healthy, double Zombies, double Dead);
+public sealed record NewsItem(DateTime Date, string Text, ConsoleColor Color);
 
 public enum GameResult { Ongoing, Victory, DefeatHumanity, DefeatTrust, Abandoned }
 
@@ -12,10 +11,10 @@ public sealed class World
     private double research;
     private readonly double initialCapacityWeight;
 
-    public World(List<Region> regions, Difficulty difficulty, int seed)
+    public World(List<Country> countries, WorldMap map, Difficulty difficulty, int seed)
     {
-        Regions = regions;
-        Countries = regions.SelectMany(r => r.Countries).ToList();
+        Countries = countries;
+        Map = map;
         Difficulty = difficulty;
         Rng = new Random(seed);
         Funds = difficulty.StartFunds;
@@ -24,21 +23,24 @@ public sealed class World
         initialCapacityWeight = Countries.Sum(c => CapacityWeight(c) * c.InitialPopulation);
     }
 
-    public List<Region> Regions { get; }
     public List<Country> Countries { get; }
+    public WorldMap Map { get; }
     public Difficulty Difficulty { get; }
     public Random Rng { get; }
     public double InitialPopulation { get; }
     public Country PatientZero { get; set; } = null!;
 
-    public int Week { get; set; } = 1;
+    public DateTime StartDate { get; } = DateTime.Today;
+    public int Day { get; set; }
+    public DateTime Date => StartDate.AddDays(Day);
+    public int Week => Day / 7 + 1;
+
     public double Funds { get; set; }
     public double Infectivity { get; set; }
     public int ResearchLevel { get; set; }
     public bool CureDeployed { get; set; }
-    public int LastSpeechWeek { get; set; } = -99;
-    public double LastIncome { get; set; }
-    public double LastResearchGain { get; set; }
+    public double WeeklyIncome { get; set; }     // 화면 표시용 (주당 수입)
+    public double WeeklyResearch { get; set; }   // 화면 표시용 (주당 연구 진척)
 
     public double Trust
     {
@@ -53,7 +55,6 @@ public sealed class World
     }
 
     public List<NewsItem> News { get; } = new();
-    public List<WeekSnapshot> History { get; } = new();
 
     public double TotalHealthy => Countries.Sum(c => c.Healthy);
     public double TotalZombies => Countries.Sum(c => c.Zombies);
@@ -61,9 +62,7 @@ public sealed class World
     public int InfectedCount => Countries.Count(c => c.IsInfected);
     public int CollapsedCount => Countries.Count(c => c.Collapsed);
 
-    public void AddNews(string text, ConsoleColor color = ConsoleColor.Gray) => News.Add(new NewsItem(Week, text, color));
-
-    public void RecordHistory() => History.Add(new WeekSnapshot(Week, TotalHealthy, TotalZombies, TotalDead));
+    public void AddNews(string text, ConsoleColor color = ConsoleColor.Gray) => News.Add(new NewsItem(Date, text, color));
 
     /// <summary>
     /// 연구·경제를 떠받치는 '정상 작동 중인 국가'의 비율 (0~1).
@@ -82,11 +81,4 @@ public sealed class World
         Wealth.Mid => 0.3,
         _ => 0.05
     };
-
-    /// <summary>국가명 일부 또는 국가 코드(KOR 등)로 검색합니다.</summary>
-    public List<Country> FindCountries(string query)
-    {
-        var exact = Countries.Where(c => c.Name == query || c.Code.Equals(query, StringComparison.OrdinalIgnoreCase)).ToList();
-        return exact.Count > 0 ? exact : Countries.Where(c => c.Name.Contains(query)).ToList();
-    }
 }

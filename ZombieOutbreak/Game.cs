@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using ZombieOutbreak.Core;
 using ZombieOutbreak.Data;
 using ZombieOutbreak.Systems;
@@ -5,9 +6,15 @@ using ZombieOutbreak.UI;
 
 namespace ZombieOutbreak;
 
-/// <summary>게임 흐름 담당: 타이틀 → 브리핑 → (플레이어 조치 ↔ 턴 진행) 반복 → 엔딩.</summary>
+/// <summary>
+/// 게임 흐름 담당: 타이틀 → 브리핑 → 실시간 게임 루프 → 엔딩.
+/// 실시간 루프 = "키 입력 처리 → 시간이 됐으면 하루 진행 → 바뀐 게 있으면 다시 그리기"의 반복.
+/// </summary>
 public sealed class Game
 {
+    private const int BlinkMs = 450;
+    private const int FrameSleepMs = 15;
+
     public void Run()
     {
         while (true)
@@ -27,54 +34,69 @@ public sealed class Game
 
     private static GameResult Play(World w)
     {
-        string? message = null;
-        bool success = true;
+        var view = new ViewState();
+        view.MoveCursorTo(w.PatientZero);
+        var buffer = new ScreenBuffer();
+        var clock = Stopwatch.StartNew();   // 경과 시간을 밀리초 단위로 재는 타이머
+        long nextDayMs = ViewState.DayLengthMs[view.Speed];
+        long nextBlinkMs = 0;
 
-        while (true)
+        MenuScreens.EnsureWindowSize();
+        Console.CursorVisible = false;
+
+        try
         {
-            HudScreen.Draw(w, message, success);
-            message = null;
-
-            var key = Ui.ReadKey();
-            switch (key.Key)
+            while (true)
             {
-                case ConsoleKey.Enter:
+                long now = clock.ElapsedMilliseconds;
+                bool dirty = false;
+
+                if (Console.WindowWidth <= ScreenBuffer.Width || Console.WindowHeight < ScreenBuffer.Height)
+                {
+                    MenuScreens.EnsureWindowSize();
+                    buffer.Invalidate();
+                    dirty = true;
+                }
+
+                while (Console.KeyAvailable)
+                {
+                    if (!Input.Handle(w, view, Console.ReadKey(intercept: true), now)) return GameResult.Abandoned;
+                    dirty = true;
+                }
+
+                if (view.IsRunning && now >= nextDayMs)
+                {
                     Simulation.Step(w);
-                    var result = Simulation.CheckResult(w);
-                    if (result != GameResult.Ongoing) return result;
+                    nextDayMs = now + ViewState.DayLengthMs[view.Speed];
+                    dirty = true;
 
-                    if (EventDeck.Draw(w) is { } drawn)   // 패턴 매칭: null이 아니면 drawn에 담음
+                    if (w.Day % 7 == 0 && EventDeck.Draw(w) is { } drawn)   // 매주 한 번 사건 카드 판정
                     {
-                        EventScreen.Show(w, drawn);
-                        result = Simulation.CheckResult(w);   // 사건 선택으로 신뢰도가 0이 될 수도 있음
-                        if (result != GameResult.Ongoing) return result;
+                        view.Event = drawn;
+                        view.EventError = null;
                     }
-                    break;
+                }
 
-                case ConsoleKey.Escape:
-                    if (Ui.Confirm("정말 작전을 포기하시겠습니까?")) return GameResult.Abandoned;
-                    break;
-            }
+                if (now >= nextBlinkMs)
+                {
+                    view.Blink = !view.Blink;
+                    nextBlinkMs = now + BlinkMs;
+                    dirty = true;
+                }
 
-            switch (key.KeyChar)
-            {
-                case '1':
-                    CountryScreens.ShowList(w);
-                    break;
-                case '2':
-                    if (MenuScreens.SelectRegion(w) is { } region) CountryScreens.ShowList(w, region);
-                    break;
-                case '3':
-                    MenuScreens.Research(w);
-                    break;
-                case '4':
-                    var speech = Actions.Speech(w);
-                    (message, success) = (speech.Message, speech.Success);   // 튜플로 두 변수 동시 대입
-                    break;
-                case '5':
-                    MenuScreens.Statistics(w);
-                    break;
+                if (!dirty) { Thread.Sleep(FrameSleepMs); continue; }
+
+                var result = Simulation.CheckResult(w);
+                if (result != GameResult.Ongoing) return result;
+
+                GameScreen.Render(w, view, buffer, now);
+                buffer.Flush();
             }
+        }
+        finally   // return으로 빠져나가도 반드시 실행됨
+        {
+            Console.CursorVisible = true;
+            Console.ResetColor();
         }
     }
 }
